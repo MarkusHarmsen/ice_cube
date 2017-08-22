@@ -240,11 +240,11 @@ module IceCube
     end
 
     # Determine if the schedule is occurring at a given time
-    def occurring_at?(time)
+    def occurring_at?(time, options = {})
       time = TimeUtil.match_zone(time, start_time) or raise ArgumentError, "Time required, got #{time.inspect}"
       if duration > 0
         return false if exception_time?(time)
-        occurs_between?(time - duration + 1, time)
+        occurs_between?(time - duration + 1, time, options)
       else
         occurs_at?(time)
       end
@@ -291,8 +291,8 @@ module IceCube
     end
 
     # Determine if the schedule occurs at a specific time
-    def occurs_at?(time)
-      occurs_between?(time, time)
+    def occurs_at?(time, options = {})
+      occurs_between?(time, time, options)
     end
 
     # Get the first n occurrences, or the first occurrence if n is skipped
@@ -426,13 +426,14 @@ module IceCube
       opening_time += start_time.subsec - opening_time.subsec rescue 0
       opening_time = start_time if opening_time < start_time
       spans = options[:spans] == true && duration != 0
+      revert_dst_change = options[:revert_dst_change] == true
       Enumerator.new do |yielder|
         reset
         t1 = full_required? ? start_time : opening_time
         t1 -= duration if spans
         t1 = start_time if t1 < start_time
         loop do
-          break unless (t0 = next_time(t1, closing_time))
+          break unless (t0 = next_time(t1, closing_time, revert_dst_change))
           break if closing_time && t0 > closing_time
           if (spans ? (t0.end_time > opening_time) : (t0 >= opening_time))
             yielder << (block_given? ? yield(t0) : t0)
@@ -443,7 +444,7 @@ module IceCube
     end
 
     # Get the next time after (or including) a specific time
-    def next_time(time, closing_time)
+    def next_time(time, closing_time, revert_dst_change = false)
       loop do
         min_time = recurrence_rules_with_implicit_start_occurrence.reduce(nil) do |min_time, rule|
           begin
@@ -455,7 +456,14 @@ module IceCube
         end
         break unless min_time
         next (time = min_time + 1) if exception_time?(min_time)
-        break Occurrence.new(min_time, min_time + duration)
+
+        # "Revert" DST change
+        max_time = min_time + duration
+        if revert_dst_change && min_time.utc_offset != max_time.utc_offset
+          max_time += (min_time.utc_offset - max_time.utc_offset)
+        end
+
+        break Occurrence.new(min_time, max_time)
       end
     end
 
